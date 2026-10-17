@@ -1,0 +1,81 @@
+name: API Trigger
+on:
+  push:
+    branches:
+      - main    # You can change this to your actual main branch name
+jobs:
+  call-apis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch all history for better detection
+      
+      - name: Get changed files
+        id: changed-files
+        run: |
+          # Get the current commit hash
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          
+          # Try to get the parent commit hash, or use empty string if it fails
+          PARENT_COMMIT=$(git rev-parse HEAD^ 2>/dev/null || echo "")
+          
+          if [ -n "$PARENT_COMMIT" ]; then
+            # If there's a parent commit, get the diff
+            CHANGED_FILES=$(git diff --name-only $PARENT_COMMIT $CURRENT_COMMIT)
+          else
+            # For first commit or other edge cases, list all tracked files
+            CHANGED_FILES=$(git ls-tree -r HEAD --name-only)
+          fi
+          
+          # Create a safe output format
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Process files and call APIs
+        env:
+          API_TOKEN: ${{ secrets.API_KEY }}
+        run: |
+          # Define mappings
+          MAPPINGS=(
+            "planner.txt:740922"
+            "rag.txt:650504"
+            "tool.txt:108617"
+            "greetings.txt:503406"
+            "responder.txt:942386"
+          )
+          
+          # Read the files from the output
+          IFS=$'\n'
+          CHANGED_FILES=(${{ steps.changed-files.outputs.files }})
+          
+          for FILE in "${CHANGED_FILES[@]}"; do
+            # Check if the file exists
+            if [[ -f "$FILE" ]]; then
+              # Find matching endpoint
+              ENDPOINT=""
+              for MAPPING in "${MAPPINGS[@]}"; do
+                FILE_NAME="${MAPPING%%:*}"
+                if [[ "$FILE" == "$FILE_NAME" ]]; then
+                  ENDPOINT="${MAPPING#*:}"
+                  break
+                fi
+              done
+              
+              # Call API if endpoint found
+              if [[ -n "$ENDPOINT" ]]; then
+                echo "Processing $FILE for endpoint $ENDPOINT"
+                
+                curl -X POST \
+                  "https://app.sofitech.ai/api/accounts/bot_fields/$ENDPOINT" \
+                  -H "accept: application/json" \
+                  -H "X-ACCESS-TOKEN: $API_TOKEN" \
+                  -H "Content-Type: application/x-www-form-urlencoded" \
+                  --data-urlencode "value@$FILE"
+                
+                echo "✅ Prompt Updated"
+              fi
+            fi
+          done
